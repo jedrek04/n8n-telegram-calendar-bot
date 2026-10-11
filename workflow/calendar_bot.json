@@ -1,0 +1,1314 @@
+{
+  "name": "calendar_bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query",
+          "inline_query"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        416
+      ],
+      "id": "318095e1-53fe-480a-8ab0-8ed3db0aed1d",
+      "name": "Telegram Trigger",
+      "webhookId": "1b7435ea-8884-4dce-bbf4-d3b0f26eccdf",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json;\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nlet text = `📅 <b>${esc(e.title)}</b>\\n🕐 ${esc(e.label)}`;\nif (e.duration_defaulted) text += ' <i>(default 1h)</i>';\nif (e.location) text += `\\n📍 ${esc(e.location)}`;\nif (e.notes) text += `\\n📝 ${esc(e.notes)}`;\nreturn [{ json: { ...e, card: text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        0
+      ],
+      "id": "3e0d911c-a1f6-407a-86dc-87317e86ba9a",
+      "name": "Build card"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sent = $input.first().json;\nconst messageId = sent.message_id ?? sent.result?.message_id;\nif (!messageId) {\n  throw new Error('no message_id in Telegram response: ' + JSON.stringify(sent).slice(0, 300));\n}\n\nconst d = $('Build card').first().json;\nconst store = $getWorkflowStaticData('global');\nstore.drafts = store.drafts || {};\n\nconst now = Date.now();\nfor (const k of Object.keys(store.drafts)) {\n  if (now - store.drafts[k].created > 24 * 3600 * 1000) delete store.drafts[k];\n}\n\nstore.drafts[messageId] = {\n  created: now,\n  title: d.title,\n  start: d.start,\n  end: d.end,\n  location: d.location,\n  notes: d.notes,\n  duration_defaulted: d.duration_defaulted,\n  orig: $('Telegram Trigger').first().json.message.message_id,\n};\n\nstore.latest = messageId;\n\nreturn [{ json: { saved: messageId, orig: store.drafts[messageId].orig, latest: store.latest, drafts_count: Object.keys(store.drafts).length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2688,
+        0
+      ],
+      "id": "648005da-d5c4-458b-a086-77b1e85c1915",
+      "name": "Save draft"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cb = $('Telegram Trigger').first().json.callback_query;\nconst action = cb.data;\nconst id = cb.message.message_id;\nconst store = $getWorkflowStaticData('global');\nconst d = store.drafts ? store.drafts[id] : undefined;\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nif (!d) {\n  return [{ json: {\n    found: false, action, id,\n    card: esc(cb.message.text || '') + '\\n\\n⚠️ Draft not found (expired or older than the draft store). Send the event again.',\n  } }];\n}\n\nconst tz = 'Europe/Amsterdam';\nconst s = DateTime.fromISO(d.start, { zone: tz });\nconst e = DateTime.fromISO(d.end, { zone: tz });\n\nlet base = `📅 <b>${esc(d.title)}</b>\\n🕐 ${esc(s.setLocale('en').toFormat('ccc d LLL yyyy, HH:mm') + ' - ' + e.toFormat('HH:mm'))}`;\nif (d.duration_defaulted) base += ' <i>(default 1h)</i>';\nif (d.location) base += `\\n📍 ${esc(d.location)}`;\nif (d.notes) base += `\\n📝 ${esc(d.notes)}`;\nconst status = action === 'add' ? '✅ Added to calendar' : '❌ Cancelled';\n\nconst icsText = t => String(t).replace(/\\\\/g, '\\\\\\\\').replace(/;/g, '\\\\;').replace(/,/g, '\\\\,').replace(/\\r?\\n/g, '\\\\n');\nconst utc = dt => dt.toUTC().toFormat(\"yyyyMMdd'T'HHmmss'Z'\");\nconst name = `n8n-${id}-${Date.now()}`;\nconst lines = [\n  'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//n8n calendar bot//EN', 'BEGIN:VEVENT',\n  `UID:${name}@<domain>`, `DTSTAMP:${utc(DateTime.now())}`,\n  `DTSTART:${utc(s)}`, `DTEND:${utc(e)}`, `SUMMARY:${icsText(d.title)}`,\n];\nif (d.location) lines.push(`LOCATION:${icsText(d.location)}`);\nif (d.notes) lines.push(`DESCRIPTION:${icsText(d.notes)}`);\nlines.push('END:VEVENT', 'END:VCALENDAR', '');\n\ndelete store.drafts[id];\nif (String(store.latest) === String(id)) delete store.latest;\n\nreturn [{ json: {\n  found: true, action, id, orig: d.orig,\n  card: base + '\\n\\n' + status,\n  card_base: base,\n  ics: lines.join('\\r\\n'),\n  ics_name: name + '.ics',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        512
+      ],
+      "id": "3dabadd2-6505-475d-9015-753fc000baa7",
+      "name": "Load draft"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://<yournextcloudpublicdomain>/remote.php/dav/calendars/<youruser>/personal/{{ $json.ics_name }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "nextCloudApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/calendar",
+        "body": "={{ $json.ics }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1344,
+        368
+      ],
+      "id": "fe20f75a-abb0-4e40-af19-b22891a399e4",
+      "name": "Save to calendar",
+      "credentials": {
+        "nextCloudApi": {
+          "id": "USZ565wbf0iuLkK7",
+          "name": "NextCloud account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const m = $('Telegram Trigger').first().json.message;\nconst replyTo = m.reply_to_message.message_id;\nconst store = $getWorkflowStaticData('global');\nconst draft = store.drafts ? store.drafts[replyTo] : undefined;\nconst isLatest = String(store.latest) === String(replyTo);\n\nlet status;\nif (!draft) status = 'closed';\nelse if (!isLatest) status = 'older';\nelse status = 'editable';\n\nlet current = null;\nif (draft) {\n  const tz = 'Europe/Amsterdam';\n  const s = DateTime.fromISO(draft.start, { zone: tz });\n  const e = DateTime.fromISO(draft.end, { zone: tz });\n  current = {\n    title: draft.title,\n    date_kind: 'explicit',\n    weekday: 'none',\n    day: s.day,\n    month: s.month,\n    year: s.year,\n    offset_amount: null,\n    offset_unit: 'none',\n    start_time: s.toFormat('HH:mm'),\n    duration_minutes: Math.round(e.diff(s, 'minutes').minutes),\n    location: draft.location ?? null,\n    notes: draft.notes ?? null,\n  };\n}\n\nreturn [{ json: { status, replyTo, text: m.text, current } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        1040
+      ],
+      "id": "127e29d8-4bd9-4cff-aeaf-6217b43f59e8",
+      "name": "Check reply"
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst store = $getWorkflowStaticData('global');\nstore.drafts = store.drafts || {};\nstore.drafts[r.replyTo] = r.updated;\nreturn [{ json: r }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        848
+      ],
+      "id": "12457192-f892-4fc0-be8c-ab8f60e22801",
+      "name": "Save edit"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6986257a-c573-49ae-9bc6-3ed8ba30eed1",
+              "leftValue": "={{ String($json.message?.chat?.id ?? $json.callback_query?.message?.chat?.id) }}",
+              "rightValue": "<yourtelegramuserid>",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        224,
+        416
+      ],
+      "id": "dc19a35e-c4ba-4880-9efb-c492a9959fd9",
+      "name": "Only my chat"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.photo }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "array",
+                      "operation": "notEmpty",
+                      "singleValue": true
+                    },
+                    "id": "c26e28c3-3f74-4ac6-bcae-7dd20780eab6"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "photo"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "098144c2-c2f8-4f69-9115-5dd06d0ce539",
+                    "leftValue": "={{ $json.message?.reply_to_message ? undefined : $json.message?.text }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "text"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "9525ab5f-254b-4e25-81f5-bdf8d3b82426",
+                    "leftValue": "={{ $json.callback_query?.data }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "button"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "cc2d9d75-5084-4f2f-ba1e-8e9f69254622",
+                    "leftValue": "={{ $json.message?.reply_to_message ? $json.message?.text : undefined }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reply"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        448,
+        384
+      ],
+      "id": "851da6ce-d56e-44c3-b1df-982e8c5c015a",
+      "name": "Route update"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.178.101:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"qwen3.5:4b\",\n  stream: false,\n  think: false,\n  keep_alive: -1,\n  options: { num_ctx: 2048, temperature: 0 },\n  format: {\n    type: \"object\",\n    properties: {\n      title: { type: \"string\" },\n      date_kind: { type: \"string\", enum: [\"today\", \"tomorrow\", \"day_after_tomorrow\", \"weekday\", \"explicit\", \"offset\"] },\n      weekday: { type: \"string\", enum: [\"none\", \"monday\", \"tuesday\", \"wednesday\", \"thursday\", \"friday\", \"saturday\", \"sunday\"] },\n      day: { type: [\"integer\", \"null\"] },\n      month: { type: [\"integer\", \"null\"] },\n      year: { type: [\"integer\", \"null\"] },\n      offset_amount: { type: [\"integer\", \"null\"] },\n      offset_unit: { type: \"string\", enum: [\"none\", \"days\", \"weeks\", \"months\"] },\n      start_time: { type: \"string\" },\n      duration_minutes: { type: [\"integer\", \"null\"] },\n      location: { type: [\"string\", \"null\"] },\n      notes: { type: [\"string\", \"null\"] }\n    },\n    required: [\"title\", \"date_kind\", \"weekday\", \"day\", \"month\", \"year\", \"offset_amount\", \"offset_unit\", \"start_time\", \"duration_minutes\", \"location\", \"notes\"]\n  },\n  messages: [\n    { role: \"system\", content: \"Extract a calendar event from the user's message. Return only JSON. title: short event name, including who it is with. Describe the date in English terms without calculating it. date_kind: 'today' (dzisiaj, dziś, vandaag), 'tomorrow' (jutro, morgen), 'day_after_tomorrow' (pojutrze, overmorgen), 'weekday' (a weekday name such as Friday, piątek, środa, woensdag; set weekday), 'explicit' (a calendar date such as '20 Oct' or '3.01'; set day and month as numbers, and year only if it is written), or 'offset' (such as 'in 3 days', 'za 2 tygodnie', 'over 2 weken'; set offset_amount and offset_unit). Fields that do not apply: weekday 'none', offset_unit 'none', numbers null. start_time: 24h HH:MM. duration_minutes: only if stated, else null. location: only a place name or address that is explicitly stated, copied as written; never repeat the title or an activity in it, else null. notes: only practical details about the event itself (what to bring, room, link, agenda); ignore feelings and chit-chat. Always include every field. If both a weekday name and a calendar date are written (for example 'Saturday 23rd April' or 'saturday 24 oct'), always use date_kind 'explicit' and set day and month from the calendar date as numbers; ignore the weekday name and set weekday to 'none'. The message may be in English, Polish or Dutch.\" },\n    { role: \"user\", content: $json.message.text }\n  ]\n}) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1568,
+        96
+      ],
+      "id": "8a5de4c6-4ebc-41af-b431-59398275e40c",
+      "name": "Parse event with LLM",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.message.content;\nlet ev;\ntry { ev = JSON.parse(raw); }\ncatch (e) { return [{ json: { ok: false, error: 'invalid JSON from model', raw } }]; }\n\nconst tz = 'Europe/Amsterdam';\nconst today = DateTime.now().setZone(tz).startOf('day');\nconst WD = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 7 };\n\nlet date = null;\nswitch (ev.date_kind) {\n  case 'today': date = today; break;\n  case 'tomorrow': date = today.plus({ days: 1 }); break;\n  case 'day_after_tomorrow': date = today.plus({ days: 2 }); break;\n  case 'weekday': {\n    const wd = WD[ev.weekday];\n    if (wd) {\n      let ahead = (wd - today.weekday + 7) % 7;\n      if (ahead === 0) ahead = 7;\n      date = today.plus({ days: ahead });\n    }\n    break;\n  }\n  case 'explicit': {\n    if (ev.day && ev.month) {\n      date = DateTime.fromObject({ year: ev.year || today.year, month: ev.month, day: ev.day }, { zone: tz });\n      if (!ev.year && date.isValid && date < today) date = date.plus({ years: 1 });\n    }\n    break;\n  }\n  case 'offset': {\n    if (ev.offset_amount > 0 && ['days', 'weeks', 'months'].includes(ev.offset_unit)) {\n      date = today.plus({ [ev.offset_unit]: ev.offset_amount });\n    }\n    break;\n  }\n}\n\nif (!date || !date.isValid) return [{ json: { ok: false, error: 'could not resolve date', ...ev } }];\n\nconst tm = (ev.start_time || '').match(/^(\\d{1,2}):(\\d{2})$/);\nif (!tm || +tm[1] > 23 || +tm[2] > 59) return [{ json: { ok: false, error: 'could not read time', ...ev } }];\n\nconst start = date.set({ hour: +tm[1], minute: +tm[2] });\nif (start.startOf('day') < today) return [{ json: { ok: false, error: 'date is in the past', ...ev } }];\n\nconst dur = Number.isInteger(ev.duration_minutes) && ev.duration_minutes > 0 ? ev.duration_minutes : 60;\nconst end = start.plus({ minutes: dur });\n\nreturn [{ json: {\n  ok: true,\n  title: ev.title,\n  location: ev.location ?? null,\n  notes: ev.notes ?? null,\n  start: start.toFormat(\"yyyy-MM-dd'T'HH:mm\"),\n  end: end.toFormat(\"yyyy-MM-dd'T'HH:mm\"),\n  duration_minutes: dur,\n  duration_defaulted: dur !== ev.duration_minutes,\n  label: start.setLocale('en').toFormat('ccc d LLL yyyy, HH:mm') + ' - ' + end.toFormat('HH:mm'),\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        96
+      ],
+      "id": "24e99ed8-7cb7-4a16-99b8-0f5b2694fdf1",
+      "name": "Resolve date"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "93bb9301-8b77-441e-9766-a821954f1964",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2016,
+        96
+      ],
+      "id": "3f06a760-a9e6-43da-a1ff-bfa4600b8209",
+      "name": "Event parsed ok"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.card }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Add",
+                    "additionalFields": {
+                      "callback_data": "add"
+                    }
+                  },
+                  {
+                    "text": "❌ Cancel",
+                    "additionalFields": {
+                      "callback_data": "cancel"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2464,
+        0
+      ],
+      "id": "245390cc-f9eb-4aa7-8021-6b3c7d331b60",
+      "name": "Send event card",
+      "webhookId": "2c668d58-f994-44b4-bcd6-cc7bf28320cf",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=⚠️ Couldn't read that event ({{ $json.error }}). Try rephrasing it.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2240,
+        416
+      ],
+      "id": "34c96b13-aa17-41cb-9503-f3a5545cbcb2",
+      "name": "Send parse error",
+      "webhookId": "596921fa-d37e-42ca-bfad-1d9ecbf7e586",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "queryId": "={{ $('Telegram Trigger').item.json.callback_query.id }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        512
+      ],
+      "id": "e841d30c-6f62-4ad9-8c31-a3c9bb15cb8b",
+      "name": "Answer button tap",
+      "webhookId": "d4ed9ce3-d16a-4a29-8019-ee8814d0c69d",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "eb7da6cb-6014-49c1-80de-10c814d2398c",
+              "leftValue": "={{ $json.found === true && $json.action === 'add' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1120,
+        512
+      ],
+      "id": "400dab82-a642-4fcb-8998-9ebc10de26ad",
+      "name": "Is add"
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $('Telegram Trigger').item.json.callback_query.message.chat.id }}",
+        "messageId": "={{ $('Telegram Trigger').item.json.callback_query.message.message_id }}",
+        "text": "={{ $json.error ? $('Load draft').first().json.card_base + '\\n\\n⚠️ Could not save to the calendar. Send the event again.' : $('Load draft').first().json.card }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1568,
+        416
+      ],
+      "id": "fd53aa26-eabf-401d-9f6e-946c4f9321f8",
+      "name": "Close card",
+      "webhookId": "88dbb698-33ab-46ad-917a-eb64bb697a6b",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "47187a63-5124-48e2-9ac0-4f343648de5f",
+              "leftValue": "={{ $json.status === 'editable' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        1040
+      ],
+      "id": "8eef7ad8-5e4f-464a-a06b-c5bfd196aace",
+      "name": "Can edit"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.status === 'older' ? '🔒 Only the latest card can be edited.' : '🔒 That event can no longer be changed.' }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        1232
+      ],
+      "id": "14e4df9c-782b-40cd-bb63-5ddfa4fe6cc8",
+      "name": "Send locked notice",
+      "webhookId": "77c1a287-cdbc-49a3-8b66-ba2f61e9e936",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "deleteMessage",
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "messageId": "={{ $('Telegram Trigger').first().json.message.message_id }}"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2240,
+        1040
+      ],
+      "id": "d8e1c4f2-9a9e-47bf-ad8b-f1067b075515",
+      "name": "Delete my reply",
+      "webhookId": "f035f4fa-fcd9-4fba-a655-fcea8afd0192",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.178.101:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"qwen3.5:4b\",\n  stream: false,\n  think: false,\n  keep_alive: -1,\n  options: { num_ctx: 2048, temperature: 0 },\n  format: {\n    type: \"object\",\n    properties: {\n      understood: { type: \"boolean\" },\n      title: { type: \"string\" },\n      date_kind: { type: \"string\", enum: [\"today\", \"tomorrow\", \"day_after_tomorrow\", \"weekday\", \"explicit\", \"offset\"] },\n      weekday: { type: \"string\", enum: [\"none\", \"monday\", \"tuesday\", \"wednesday\", \"thursday\", \"friday\", \"saturday\", \"sunday\"] },\n      day: { type: [\"integer\", \"null\"] },\n      month: { type: [\"integer\", \"null\"] },\n      year: { type: [\"integer\", \"null\"] },\n      offset_amount: { type: [\"integer\", \"null\"] },\n      offset_unit: { type: \"string\", enum: [\"none\", \"days\", \"weeks\", \"months\"] },\n      start_time: { type: \"string\" },\n      duration_minutes: { type: [\"integer\", \"null\"] },\n      location: { type: [\"string\", \"null\"] },\n      notes: { type: [\"string\", \"null\"] }\n    },\n    required: [\"understood\", \"title\", \"date_kind\", \"weekday\", \"day\", \"month\", \"year\", \"offset_amount\", \"offset_unit\", \"start_time\", \"duration_minutes\", \"location\", \"notes\"]\n  },\n  messages: [\n    { role: \"system\", content: \"You edit a calendar event. You get the current event as JSON and a message the user wrote about it. Return the full updated event in the same format. The user is talking about this event, so be generous: assume the message is meant for it. Change only what the message asks for or tells you, and copy every other field exactly as it is. The message can be: (1) a change to the title, date, time, duration or place, e.g. 'make it 15:00', 'move to friday', 'it is at the office'; (2) a reminder, instruction or detail for the user about the event: things to bring, wear or prepare, dress code, who will be there, how to get there, how the user should behave, a link, a phone number, a room, a worry. Examples: 'I need to bring cash', 'I have to be elegant', 'dress code smart casual', 'take the contract', 'call him before', 'parking is difficult'. Everything of type (2) is valid: add it to notes, keeping the existing notes and appending the new detail after '; ', written short and in the user's language, as a note to the user (for example 'Be elegant', 'Bring cash'). A place or address goes to location, not to notes. (3) A request to remove something, e.g. 'remove the note' or 'no location': set that field to null. If the message does not change the date, keep date_kind 'explicit' with the same day, month and year. If it changes the date, describe the new date without calculating it: date_kind 'tomorrow', 'day_after_tomorrow', 'weekday' (set weekday), 'explicit' (set day and month, and year only if the user wrote it) or 'offset' (set offset_amount and offset_unit). Fields that do not apply: weekday 'none', offset_unit 'none', numbers null. start_time: 24h HH:MM. duration_minutes: a number of minutes (2h = 120). Set understood to true whenever the message could reasonably relate to this event. Set understood to false only for messages that clearly have nothing to do with it: random words, gibberish, a general question, or small talk with no information about the event; then return the current event unchanged. The message may be in English, Polish or Dutch.\" },\n    { role: \"user\", content: \"Current event:\\n\" + JSON.stringify($json.current) + \"\\n\\nMessage: \" + $json.text }\n  ]\n}) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        944
+      ],
+      "id": "f9de5aea-102f-4110-a127-912ff0734035",
+      "name": "Edit event with LLM",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.message.content;\nconst chk = $('Check reply').first().json;\nconst store = $getWorkflowStaticData('global');\nconst draft = store.drafts ? store.drafts[chk.replyTo] : undefined;\nconst fail = reason => [{ json: { ok: false, reason, replyTo: chk.replyTo } }];\n\nif (!draft) return fail('draft gone');\n\nlet ev;\ntry { ev = JSON.parse(raw); } catch (e) { return fail('invalid JSON from model'); }\nif (ev.understood !== true) return fail('not understood');\n\nconst tz = 'Europe/Amsterdam';\nconst today = DateTime.now().setZone(tz).startOf('day');\nconst WD = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 7 };\n\nlet date = null;\nswitch (ev.date_kind) {\n  case 'today': date = today; break;\n  case 'tomorrow': date = today.plus({ days: 1 }); break;\n  case 'day_after_tomorrow': date = today.plus({ days: 2 }); break;\n  case 'weekday': {\n    const wd = WD[ev.weekday];\n    if (wd) {\n      let ahead = (wd - today.weekday + 7) % 7;\n      if (ahead === 0) ahead = 7;\n      date = today.plus({ days: ahead });\n    }\n    break;\n  }\n  case 'explicit': {\n    if (ev.day && ev.month) {\n      date = DateTime.fromObject({ year: ev.year || today.year, month: ev.month, day: ev.day }, { zone: tz });\n      if (!ev.year && date.isValid && date < today) date = date.plus({ years: 1 });\n    }\n    break;\n  }\n  case 'offset': {\n    if (ev.offset_amount > 0 && ['days', 'weeks', 'months'].includes(ev.offset_unit)) {\n      date = today.plus({ [ev.offset_unit]: ev.offset_amount });\n    }\n    break;\n  }\n}\nif (!date || !date.isValid) return fail('could not resolve date');\n\nconst tm = (ev.start_time || '').match(/^(\\d{1,2}):(\\d{2})$/);\nif (!tm || +tm[1] > 23 || +tm[2] > 59) return fail('could not read time');\n\nconst start = date.set({ hour: +tm[1], minute: +tm[2] });\nif (start.startOf('day') < today) return fail('date is in the past');\n\nconst oldStart = DateTime.fromISO(draft.start, { zone: tz });\nconst oldEnd = DateTime.fromISO(draft.end, { zone: tz });\nconst oldDur = Math.round(oldEnd.diff(oldStart, 'minutes').minutes);\nconst dur = Number.isInteger(ev.duration_minutes) && ev.duration_minutes > 0 ? ev.duration_minutes : oldDur;\nconst end = start.plus({ minutes: dur });\n\nconst updated = {\n  created: draft.created,\n  orig: draft.orig,\n  title: (ev.title || '').trim() || draft.title,\n  start: start.toFormat(\"yyyy-MM-dd'T'HH:mm\"),\n  end: end.toFormat(\"yyyy-MM-dd'T'HH:mm\"),\n  location: ev.location ?? null,\n  notes: ev.notes ?? null,\n  duration_defaulted: !!draft.duration_defaulted && dur === oldDur,\n};\n\nconst changed = ['title', 'start', 'end', 'location', 'notes']\n  .some(k => updated[k] !== (draft[k] ?? null));\nif (!changed) return fail('no change');\n\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst label = start.setLocale('en').toFormat('ccc d LLL yyyy, HH:mm') + ' - ' + end.toFormat('HH:mm');\nlet card = `📅 <b>${esc(updated.title)}</b>\\n🕐 ${esc(label)}`;\nif (updated.duration_defaulted) card += ' <i>(default 1h)</i>';\nif (updated.location) card += `\\n📍 ${esc(updated.location)}`;\nif (updated.notes) card += `\\n📝 ${esc(updated.notes)}`;\n\nreturn [{ json: { ok: true, replyTo: chk.replyTo, updated, card, label } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        944
+      ],
+      "id": "79b78ac3-146e-43d4-8d2a-b57bf2a9bfae",
+      "name": "Resolve edit"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "76e76c58-73b1-4cb7-9876-1231a7451be6",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1568,
+        944
+      ],
+      "id": "19b9e160-b150-4e2f-a982-56a7a6916835",
+      "name": "Edit understood"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "={{ $json.reason === 'no change' ? \"ℹ️ Nothing to change, the card already says that.\" : $json.reason === 'not understood' ? \"🤷 That doesn't look like a change to this event.\" : \"⚠️ Could not apply that change (\" + $json.reason + \").\" }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        1040
+      ],
+      "id": "c183ec64-4b56-4319-bf3e-e12bcc41f5e1",
+      "name": "Send edit failed notice",
+      "webhookId": "0b3ada5c-60ed-47d0-ac2b-4cba3860b5c8",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "messageId": "={{ $json.replyTo }}",
+        "replyMarkup": "inlineKeyboard",
+        "text": "={{ $json.card }}",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Add",
+                    "additionalFields": {
+                      "callback_data": "add"
+                    }
+                  },
+                  {
+                    "text": "❌ Cancel",
+                    "additionalFields": {
+                      "callback_data": "cancel"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        848
+      ],
+      "id": "eeb2923d-8cc4-4293-a7d3-6c9b30d5c7b4",
+      "name": "Update card",
+      "webhookId": "4051247c-c086-43af-9684-2956b49e8594",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "bed6a7c1-7490-4b3a-a01c-409834904643",
+              "leftValue": "={{ $('Load draft').first().json.action === 'add' && $('Load draft').first().json.found === true && !$('Save to calendar').first().json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1792,
+        416
+      ],
+      "id": "3dabc4ac-b09e-4d25-ae33-2c6b6b2b0bd9",
+      "name": "Added ok"
+    },
+    {
+      "parameters": {
+        "operation": "deleteMessage",
+        "chatId": "={{ $('Telegram Trigger').first().json.callback_query.message.chat.id }}",
+        "messageId": "={{ $('Load draft').first().json.orig }}"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        416
+      ],
+      "id": "749149a9-e481-4ce2-abcd-0014cec518c0",
+      "name": "Delete original message",
+      "webhookId": "5eb86497-2af7-43a1-8d81-835edda03698",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "413bc8b5-7160-434d-8730-c8a5626b0279",
+              "leftValue": "={{ $json.found === true && $json.action === 'cancel' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1344,
+        608
+      ],
+      "id": "cf0c8ebb-c3c2-4356-a1ee-894a1da3d678",
+      "name": "Is cancel"
+    },
+    {
+      "parameters": {
+        "operation": "deleteMessage",
+        "chatId": "={{ $('Telegram Trigger').first().json.callback_query.message.chat.id }}",
+        "messageId": "={{ $('Telegram Trigger').first().json.callback_query.message.message_id }}"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1568,
+        656
+      ],
+      "id": "0396a7be-a653-4582-ba0c-e760a9c35943",
+      "name": "Delete cancelled card",
+      "webhookId": "1c2f971f-2ff4-4754-bd3c-a7423854ecca",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "deleteMessage",
+        "chatId": "={{ $('Telegram Trigger').first().json.callback_query.message.chat.id }}",
+        "messageId": "={{ $('Load draft').first().json.orig }}"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1792,
+        656
+      ],
+      "id": "3bedd807-02bb-40df-b125-a9d050cad7db",
+      "name": "Delete cancelled original",
+      "webhookId": "0483d704-2846-4524-be1c-6336d142c4aa",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.message.photo[$json.message.photo.length - 1].file_id }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        176
+      ],
+      "id": "7b3d5db3-223f-429d-9646-24efe5d9f54b",
+      "name": "Download photo",
+      "webhookId": "442e5c18-043f-4db3-9fd0-4f0c1b19aef9",
+      "credentials": {
+        "telegramApi": {
+          "id": "k8vi1ZJxlhCb1d2d",
+          "name": "Telegram account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "binaryToPropery",
+        "destinationKey": "image_b64",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        176
+      ],
+      "id": "b2ee41a5-b504-4e6a-9b53-8537846bb9df",
+      "name": "Photo to base64"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.178.101:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"qwen3.5:4b\",\n  stream: false,\n  think: false,\n  keep_alive: -1,\n  options: { num_ctx: 4096, temperature: 0 },\n  format: {\n    type: \"object\",\n    properties: { visible_text: { type: \"string\" } },\n    required: [\"visible_text\"]\n  },\n  messages: [\n    { role: \"system\", content: \"The image is a screenshot, photo or poster. Copy all the text you can read in it, exactly as written, in reading order, one line per text block. Include every date, time, name, place and number. Do not translate, summarize or add anything. Return only JSON.\" },\n    { role: \"user\", content: \"Copy the text from this image.\", images: [ $json.image_b64 ] }\n  ]\n}) }}",
+        "options": {
+          "timeout": 80000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        176
+      ],
+      "id": "177636e5-4df2-45b6-bcd5-19d671ccd8f1",
+      "name": "Read screenshot with LLM"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.message.content;\nlet text = '';\ntry { text = (JSON.parse(raw).visible_text || '').trim(); } catch (e) {}\nreturn [{ json: { message: { text }, from_photo: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        176
+      ],
+      "id": "e2c1c4b1-95fc-4529-a35c-8021a34c6287",
+      "name": "Transcript as message"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Only my chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build card": {
+      "main": [
+        [
+          {
+            "node": "Send event card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load draft": {
+      "main": [
+        [
+          {
+            "node": "Is add",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to calendar": {
+      "main": [
+        [
+          {
+            "node": "Close card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check reply": {
+      "main": [
+        [
+          {
+            "node": "Can edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save edit": {
+      "main": [
+        [
+          {
+            "node": "Update card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only my chat": {
+      "main": [
+        [
+          {
+            "node": "Route update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route update": {
+      "main": [
+        [
+          {
+            "node": "Download photo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse event with LLM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Answer button tap",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse event with LLM": {
+      "main": [
+        [
+          {
+            "node": "Resolve date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve date": {
+      "main": [
+        [
+          {
+            "node": "Event parsed ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event parsed ok": {
+      "main": [
+        [
+          {
+            "node": "Build card",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send parse error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send event card": {
+      "main": [
+        [
+          {
+            "node": "Save draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer button tap": {
+      "main": [
+        [
+          {
+            "node": "Load draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is add": {
+      "main": [
+        [
+          {
+            "node": "Save to calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can edit": {
+      "main": [
+        [
+          {
+            "node": "Edit event with LLM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send locked notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send locked notice": {
+      "main": [
+        [
+          {
+            "node": "Delete my reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit event with LLM": {
+      "main": [
+        [
+          {
+            "node": "Resolve edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve edit": {
+      "main": [
+        [
+          {
+            "node": "Edit understood",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit understood": {
+      "main": [
+        [
+          {
+            "node": "Save edit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send edit failed notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send edit failed notice": {
+      "main": [
+        [
+          {
+            "node": "Delete my reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update card": {
+      "main": [
+        [
+          {
+            "node": "Delete my reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Close card": {
+      "main": [
+        [
+          {
+            "node": "Added ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Added ok": {
+      "main": [
+        [
+          {
+            "node": "Delete original message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is cancel": {
+      "main": [
+        [
+          {
+            "node": "Delete cancelled card",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Close card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete cancelled card": {
+      "main": [
+        [
+          {
+            "node": "Delete cancelled original",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download photo": {
+      "main": [
+        [
+          {
+            "node": "Photo to base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Photo to base64": {
+      "main": [
+        [
+          {
+            "node": "Read screenshot with LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read screenshot with LLM": {
+      "main": [
+        [
+          {
+            "node": "Transcript as message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcript as message": {
+      "main": [
+        [
+          {
+            "node": "Parse event with LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "eac1ff30-1183-41f7-8571-fb253a1190d7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "250c97c7e1127e0fff3d08ec07e6b5bf2c0b07e09fbd875a9a3595d2a44a8915"
+  },
+  "nodeGroups": [],
+  "id": "0ei4j3TCP1IpIDuF",
+  "tags": []
+}
