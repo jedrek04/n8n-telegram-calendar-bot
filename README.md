@@ -121,8 +121,6 @@ Only the configured chat ID is processed, everything else is dropped. The filter
 | Reply: `make it 15:00` | Time changed, duration kept |
 | Reply: `I need to bring cash` | Note added, rest unchanged |
 
-Titles and places can vary slightly with the model; the date and time are deterministic given the model's reading. Four synthetic test screenshots are in [`examples/screenshots`](examples/screenshots).
-
 ## Limitations
 
 - Relative dates in screenshots are counted from today, not from the day the message was sent.
